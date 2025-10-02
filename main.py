@@ -10,37 +10,38 @@ app = FastAPI()
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 
-def get_google_proxy():
+def get_proxy_from_api():
     """
-    Fetches a list of 10 proxies, finds the first one that has been
-    verified to work with Google, and returns it.
+    Fetches a list of proxies from 911proxy.com and returns the first one.
     """
-    # Fetches 10 proxies, sorted by the most recently checked
-    api_url = "https://proxylist.geonode.com/api/proxy-list?limit=10&page=1&sort_by=lastChecked&sort_type=desc"
+    api_url = "https://www.911proxy.com/web_v1/free-proxy/list?page_size=5&page=1"
     try:
         response = requests.get(api_url, timeout=10)
         response.raise_for_status()
 
-        data = response.json().get("data", [])
-        if not data:
+        proxy_list = response.json().get("data", {}).get("list", [])
+        if not proxy_list:
             print("Proxy API returned no data.")
             return None
 
-        # Loop through the list of proxies
-        for proxy_info in data:
-            # Check if the 'google' key is true
-            if proxy_info.get("google") is True:
-                ip = proxy_info.get("ip")
-                port = proxy_info.get("port")
-                protocol = proxy_info.get("protocols", ["http"])[0]
+        # Use the first proxy from the list without any quality checks
+        proxy_info = proxy_list[0]
+        
+        ip = proxy_info.get("ip")
+        port = proxy_info.get("port")
+        protocol_num = proxy_info.get("protocol")
 
-                if ip and port and protocol:
-                    proxy_url = f"{protocol}://{ip}:{port}"
-                    print(f"Found Google-compatible proxy: {proxy_url}")
-                    return proxy_url # Return the first one we find
+        if protocol_num == 2:
+            protocol_str = 'http'
+        elif protocol_num == 4:
+            protocol_str = 'socks5'
+        else:
+            print(f"Unknown protocol: {protocol_num}")
+            return None
 
-        print("No Google-compatible proxy found in the top 10.")
-        return None
+        proxy_url = f"{protocol_str}://{ip}:{port}"
+        print(f"Using first available proxy: {proxy_url}")
+        return proxy_url
             
     except requests.exceptions.RequestException as e:
         print(f"Error fetching proxy list: {e}")
@@ -55,8 +56,7 @@ async def read_index():
 @app.get("/download")
 def download_youtube(url: str, type: str = Query("video", enum=["video", "audio"])):
     try:
-        # Fetch a Google-compatible proxy for the download attempt
-        proxy = get_google_proxy()
+        proxy = get_proxy_from_api()
 
         ydl_opts = {
             'quiet': True,
