@@ -3,11 +3,44 @@ from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 import yt_dlp
 import os
+import requests # New import for making HTTP requests
 
 app = FastAPI()
 
-# This is only needed to serve your HTML file
 app.mount("/static", StaticFiles(directory="static"), name="static")
+
+
+def get_latest_proxy():
+    """
+    Fetches the latest proxy from the geonode API.
+    Returns the formatted proxy URL or None if it fails.
+    """
+    api_url = "https://proxylist.geonode.com/api/proxy-list?limit=1&page=1&sort_by=lastChecked&sort_type=desc"
+    try:
+        response = requests.get(api_url, timeout=10)
+        response.raise_for_status()  # Raise an exception for bad status codes (4xx or 5xx)
+
+        data = response.json().get("data", [])
+        if not data:
+            print("Proxy API returned no data.")
+            return None
+
+        proxy_info = data[0]
+        ip = proxy_info.get("ip")
+        port = proxy_info.get("port")
+        protocol = proxy_info.get("protocols", ["http"])[0]
+
+        if ip and port and protocol:
+            proxy_url = f"{protocol}://{ip}:{port}"
+            print(f"Fetched latest proxy: {proxy_url}")
+            return proxy_url
+        else:
+            print("Failed to parse proxy details from API response.")
+            return None
+            
+    except requests.exceptions.RequestException as e:
+        print(f"Error fetching proxy: {e}")
+        return None
 
 
 @app.get("/")
@@ -18,8 +51,8 @@ async def read_index():
 @app.get("/download")
 def download_youtube(url: str, type: str = Query("video", enum=["video", "audio"])):
     try:
-        # Get proxy from environment variables (optional, but good practice)
-        proxy = os.environ.get("PROXY_URL")
+        # Fetch a new proxy for each download attempt
+        proxy = get_latest_proxy()
 
         ydl_opts = {
             'quiet': True,
@@ -28,7 +61,7 @@ def download_youtube(url: str, type: str = Query("video", enum=["video", "audio"
             }
         }
 
-        # Add proxy to options if it exists
+        # If the proxy was successfully fetched, add it to the options
         if proxy:
             ydl_opts['proxy'] = proxy
         
@@ -37,7 +70,6 @@ def download_youtube(url: str, type: str = Query("video", enum=["video", "audio"
         else:  # audio
             ydl_opts['format'] = 'bestaudio[ext=m4a]/bestaudio'
 
-        # 1. SERVER-SIDE: Extract the direct download link without downloading the file
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
             download_url = info.get('url', None)
@@ -45,16 +77,11 @@ def download_youtube(url: str, type: str = Query("video", enum=["video", "audio"
             if not download_url:
                 raise HTTPException(status_code=500, detail="Could not extract download URL.")
             
-            # 2. SERVER-SIDE: Send a redirect command to the browser
             return RedirectResponse(url=download_url)
 
     except Exception as e:
-        # Handle errors, like YouTube blocking the request
         print(f"An error occurred: {e}")
         if "confirm you’re not a bot" in str(e):
-             raise HTTPException(status_code=403, detail="YouTube is blocking this download. The proxy may also be blocked.")
-        raise HTTPException(status_code=400, detail=f"Failed to process the URL. The proxy may be offline or blocked.")
-
-# 3. BROWSER-SIDE: The browser receives the redirect and downloads the file
-#    directly from the 'download_url', saving it to the user's computer.
-#    Your server is no longer involved.
+             raise HTTPException(status_code=403, detail="YouTube is blocking this download. The fetched proxy is also blocked.")
+        raise HTTPException(status_code=400, detail=f"Failed to process the URL. The fetched proxy may be offline or blocked.")
+        
