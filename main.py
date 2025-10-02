@@ -3,43 +3,47 @@ from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 import yt_dlp
 import os
-import requests # New import for making HTTP requests
+import requests 
 
 app = FastAPI()
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 
-def get_latest_proxy():
+def get_google_proxy():
     """
-    Fetches the latest proxy from the geonode API.
-    Returns the formatted proxy URL or None if it fails.
+    Fetches a list of 10 proxies, finds the first one that has been
+    verified to work with Google, and returns it.
     """
-    api_url = "https://proxylist.geonode.com/api/proxy-list?limit=1&page=1&sort_by=lastChecked&sort_type=desc"
+    # Fetches 10 proxies, sorted by the most recently checked
+    api_url = "https://proxylist.geonode.com/api/proxy-list?limit=10&page=1&sort_by=lastChecked&sort_type=desc"
     try:
         response = requests.get(api_url, timeout=10)
-        response.raise_for_status()  # Raise an exception for bad status codes (4xx or 5xx)
+        response.raise_for_status()
 
         data = response.json().get("data", [])
         if not data:
             print("Proxy API returned no data.")
             return None
 
-        proxy_info = data[0]
-        ip = proxy_info.get("ip")
-        port = proxy_info.get("port")
-        protocol = proxy_info.get("protocols", ["http"])[0]
+        # Loop through the list of proxies
+        for proxy_info in data:
+            # Check if the 'google' key is true
+            if proxy_info.get("google") is True:
+                ip = proxy_info.get("ip")
+                port = proxy_info.get("port")
+                protocol = proxy_info.get("protocols", ["http"])[0]
 
-        if ip and port and protocol:
-            proxy_url = f"{protocol}://{ip}:{port}"
-            print(f"Fetched latest proxy: {proxy_url}")
-            return proxy_url
-        else:
-            print("Failed to parse proxy details from API response.")
-            return None
+                if ip and port and protocol:
+                    proxy_url = f"{protocol}://{ip}:{port}"
+                    print(f"Found Google-compatible proxy: {proxy_url}")
+                    return proxy_url # Return the first one we find
+
+        print("No Google-compatible proxy found in the top 10.")
+        return None
             
     except requests.exceptions.RequestException as e:
-        print(f"Error fetching proxy: {e}")
+        print(f"Error fetching proxy list: {e}")
         return None
 
 
@@ -51,8 +55,8 @@ async def read_index():
 @app.get("/download")
 def download_youtube(url: str, type: str = Query("video", enum=["video", "audio"])):
     try:
-        # Fetch a new proxy for each download attempt
-        proxy = get_latest_proxy()
+        # Fetch a Google-compatible proxy for the download attempt
+        proxy = get_google_proxy()
 
         ydl_opts = {
             'quiet': True,
@@ -61,13 +65,12 @@ def download_youtube(url: str, type: str = Query("video", enum=["video", "audio"
             }
         }
 
-        # If the proxy was successfully fetched, add it to the options
         if proxy:
             ydl_opts['proxy'] = proxy
         
         if type == "video":
             ydl_opts['format'] = 'best[ext=mp4]/best'
-        else:  # audio
+        else:
             ydl_opts['format'] = 'bestaudio[ext=m4a]/bestaudio'
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
